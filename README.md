@@ -4,7 +4,9 @@ A single-purpose, dependency-free tone generator. Two independent pure sine
 oscillators, one hard-wired to each ear, plus the maths, the readout and the
 presets needed to explore binaural beats.
 
-**Open `index.html` in a browser. That is the whole install.**
+**Live site:** <https://observeroftime02.github.io/binaural-beats-generator/>
+
+**Or open `index.html` in a browser. That is the whole install.**
 
 No server, no build step, no network requests, no libraries. Everything loads
 from this folder, including the icon (inline data URI) and the fonts (system
