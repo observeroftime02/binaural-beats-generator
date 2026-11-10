@@ -18,11 +18,16 @@
  * matters for photosensitive viewers. So the *shape* always reflects the true
  * rate (crest count), while the *phase* advances at most MOTION_CAP times a
  * second. Above 3 Hz you get a dense, slowly drifting ripple instead of a
- * strobe; the stage label says "slowed" whenever that kicks in, so the picture
- * never claims to be playing at a speed it isn't.
+ * strobe; the stage label says "slowed" whenever that kicks in.
  *
- * Motion only runs while the tones are playing, and it stops entirely for
- * anyone who has asked for reduced motion.
+ * Why nothing is measured or allocated per frame
+ * ---------------------------------------------------------------------------
+ * This loop runs while audio plays. Reading layout (getBoundingClientRect) or
+ * building a fresh gradient/path every frame competes with the audio thread for
+ * the main thread and the compositor, and the audible symptom of that is
+ * exactly a crackle. So: the canvas is measured only when a ResizeObserver
+ * says it changed, the sample buffer is reused, the gradient is cached, and
+ * the loop is capped at 30 fps — which is indistinguishable for a slow drift.
  * ---------------------------------------------------------------------------
  */
 (function (global) {
@@ -30,6 +35,7 @@
 
   var WINDOW_S = 1.0;       // seconds of beat across the canvas => crests == Hz
   var MOTION_CAP = 3.0;     // max cycles/second of on-screen movement
+  var FRAME_MS = 1000 / 30; // 30 fps: smooth enough, half the main-thread work
   var PERIOD_LO = 0.02;     // s — 50 Hz
   var PERIOD_HI = 2.0;      // s — 0.5 Hz
 
@@ -59,20 +65,6 @@
       return (raw && raw.trim()) || fallback;
     }
     return { beat: v('--beat', '#ffb454') };
-  }
-
-  function fitCanvas(canvas) {
-    var rect = canvas.getBoundingClientRect();
-    var dpr = Math.min(2, global.devicePixelRatio || 1);
-    var w = Math.max(1, Math.round(rect.width));
-    var h = Math.max(1, Math.round(rect.height));
-    if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
-      canvas.width = Math.round(w * dpr);
-      canvas.height = Math.round(h * dpr);
-    }
-    var ctx = canvas.getContext('2d');
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    return { ctx: ctx, w: w, h: h };
   }
 
   function hexA(color, alpha) {
@@ -106,10 +98,55 @@
     }
   }
 
+  /* ------------------------------------------------------------- surface */
+  /**
+   * A canvas plus its size, measured only when something says it changed.
+   * `generation` bumps whenever the backing store is resized, which is the
+   * signal for anything cached in device pixels (gradients) to be rebuilt.
+   */
+  class Surface {
+    constructor(canvas) {
+      this.canvas = canvas;
+      this.ctx = null;
+      this.w = 0;
+      this.h = 0;
+      this.dpr = 1;
+      this.dirty = true;
+      this.generation = 0;
+    }
+
+    /** @returns {boolean} true when there is something to draw on */
+    ensure() {
+      if (!this.dirty && this.ctx) return true;
+      this.dirty = false;
+
+      var rect = this.canvas.getBoundingClientRect();
+      var dpr = Math.min(2, global.devicePixelRatio || 1);
+      var w = Math.round(rect.width);
+      var h = Math.round(rect.height);
+
+      if (w <= 0 || h <= 0) {   // hidden (the dial is display:none on phones)
+        this.ctx = null;
+        return false;
+      }
+      if (this.ctx && w === this.w && h === this.h && dpr === this.dpr) return true;
+
+      this.w = w;
+      this.h = h;
+      this.dpr = dpr;
+      this.canvas.width = Math.round(w * dpr);
+      this.canvas.height = Math.round(h * dpr);
+      this.ctx = this.canvas.getContext('2d');
+      this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      this.generation++;
+      return true;
+    }
+  }
+
   /* --------------------------------------------------------- the beat wave */
   class BeatVisualizer {
     constructor(canvas) {
-      this.canvas = canvas;
+      this.surf = new Surface(canvas);
       this.beat = 10;
       this.playing = false;
       this.palette = readPalette();
@@ -117,12 +154,21 @@
       this._raf = null;
       this._queued = false;
       this._last = 0;
+      this._grad = null;
+      this._gradGen = -1;
+      this._ys = new Float32Array(0);
 
       var self = this;
       if (typeof global.ResizeObserver === 'function') {
-        new global.ResizeObserver(function () { self.invalidate(); }).observe(canvas);
+        new global.ResizeObserver(function () {
+          self.surf.dirty = true;
+          self.invalidate();
+        }).observe(canvas);
       } else {
-        global.addEventListener('resize', function () { self.invalidate(); });
+        global.addEventListener('resize', function () {
+          self.surf.dirty = true;
+          self.invalidate();
+        });
       }
       this.invalidate();
     }
@@ -150,6 +196,7 @@
 
     refreshPalette() {
       this.palette = readPalette();
+      this._grad = null;
       this.invalidate();
     }
 
@@ -167,14 +214,24 @@
       if (this._raf || prefersStill() || this.beat < 0.05) return;
       var self = this;
       this._last = (global.performance || Date).now();
-      var step = function (now) {
-        var dt = Math.min(0.1, (now - self._last) / 1000);
+      this._lastRender = 0;
+
+      var frame = function (now) {
+        // Phase always advances by the true elapsed time, so the wave moves at
+        // the right speed whatever the display refresh rate is. Only the
+        // *painting* is throttled to FRAME_MS — a slow drift looks identical
+        // at 30 fps and costs half the main-thread time.
+        var elapsed = now - self._last;
         self._last = now;
-        self.phase = (self.phase + dt * self.visualRate) % 1;
-        self.render();
-        self._raf = global.requestAnimationFrame(step);
+        self.phase = (self.phase + (elapsed / 1000) * self.visualRate) % 1;
+
+        if (now - self._lastRender >= FRAME_MS - 1.5) {
+          self._lastRender = now;
+          self.render();
+        }
+        self._raf = global.requestAnimationFrame(frame);
       };
-      this._raf = global.requestAnimationFrame(step);
+      this._raf = global.requestAnimationFrame(frame);
     }
 
     _stopLoop() {
@@ -193,14 +250,19 @@
     render() {
       this._syncLoop();
 
-      var fit = fitCanvas(this.canvas);
-      var ctx = fit.ctx, w = fit.w, h = fit.h, p = this.palette;
+      var surf = this.surf;
+      if (!surf.ensure()) return;
+
+      var ctx = surf.ctx;
+      var w = surf.w;
+      var h = surf.h;
       var beat = this.beat;
-      var live = this.playing ? 1 : 0.55;
       var mid = h / 2;
       var amp = h / 2 - 16;
+      var live = this.playing ? 1 : 0.55;
 
       ctx.clearRect(0, 0, w, h);
+      ctx.globalAlpha = live;
 
       /* quarter-second guides — one second of time across the canvas */
       ctx.strokeStyle = 'rgba(255,255,255,0.035)';
@@ -214,65 +276,89 @@
       }
 
       /* centre axis */
-      ctx.strokeStyle = 'rgba(255,255,255,' + (0.09 * live) + ')';
+      ctx.strokeStyle = 'rgba(255,255,255,0.09)';
       ctx.beginPath();
       ctx.moveTo(0, mid + 0.5);
       ctx.lineTo(w, mid + 0.5);
       ctx.stroke();
 
       if (beat < 0.05) {
+        ctx.globalAlpha = live;
         ctx.fillStyle = 'rgba(255,255,255,0.4)';
         ctx.font = '500 12px ui-sans-serif, system-ui, sans-serif';
         ctx.textAlign = 'center';
         ctx.fillText('no beat — both ears hear the same tone', w / 2, mid - 18);
+        ctx.globalAlpha = 1;
         return;
       }
 
-      /* one crest per beat cycle, scrolling at a capped rate */
+      /* one crest per beat cycle, scrolling at a capped rate. The y values go
+         into a reused buffer: no per-frame allocation, no garbage to collect
+         while the tones are playing. */
+      var step = w > 700 ? 2 : 1.5;
+      var count = Math.floor(w / step) + 2;
+      if (this._ys.length < count) this._ys = new Float32Array(count);
+
+      var ys = this._ys;
       var cycles = beat * WINDOW_S;
-      var pts = [];
-      for (var x = 0; x <= w; x += 1.5) {
-        var u = x / w;
-        var y = Math.sin(2 * Math.PI * (cycles * u - this.phase)) * amp;
-        pts.push([x, y]);
+      var phase = this.phase;
+      var n = 0;
+      for (var x = 0; x <= w; x += step) {
+        ys[n++] = Math.sin(2 * Math.PI * (cycles * (x / w) - phase)) * amp;
       }
 
-      var grad = ctx.createLinearGradient(0, 0, 0, h);
-      grad.addColorStop(0, hexA(p.beat, 0.14 * live));
-      grad.addColorStop(0.5, hexA(p.beat, 0.03 * live));
-      grad.addColorStop(1, hexA(p.beat, 0.14 * live));
+      /* gradient depends only on the palette and the surface height */
+      if (this._gradGen !== surf.generation || !this._grad) {
+        var grad = ctx.createLinearGradient(0, 0, 0, h);
+        grad.addColorStop(0, hexA(this.palette.beat, 0.16));
+        grad.addColorStop(0.5, hexA(this.palette.beat, 0.03));
+        grad.addColorStop(1, hexA(this.palette.beat, 0.16));
+        this._grad = grad;
+        this._gradGen = surf.generation;
+      }
 
       ctx.beginPath();
       ctx.moveTo(0, mid);
-      for (var i = 0; i < pts.length; i++) ctx.lineTo(pts[i][0], mid - pts[i][1]);
+      var px = 0;
+      for (var i = 0; i < n; i++) {
+        ctx.lineTo(px, mid - ys[i]);
+        px += step;
+      }
       ctx.lineTo(w, mid);
       ctx.closePath();
-      ctx.fillStyle = grad;
+      ctx.fillStyle = this._grad;
       ctx.fill();
 
-      ctx.strokeStyle = hexA(p.beat, 0.62 * live);
+      ctx.strokeStyle = hexA(this.palette.beat, 0.62);
       ctx.lineWidth = 1.5;
       ctx.lineJoin = 'round';
       ctx.beginPath();
-      for (var k = 0; k < pts.length; k++) {
-        var px = pts[k][0], py = mid - pts[k][1];
-        if (k === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+      px = 0;
+      for (var k = 0; k < n; k++) {
+        if (k === 0) ctx.moveTo(px, mid - ys[k]);
+        else ctx.lineTo(px, mid - ys[k]);
+        px += step;
       }
       ctx.stroke();
+
+      ctx.globalAlpha = 1;
     }
   }
 
   /* --------------------------------------------------------- period gauge */
   class PeriodGauge {
     constructor(canvas) {
-      this.canvas = canvas;
+      this.surf = new Surface(canvas);
       this.beat = 10;
       this.palette = readPalette();
       this._queued = false;
 
       var self = this;
       if (typeof global.ResizeObserver === 'function') {
-        new global.ResizeObserver(function () { self.invalidate(); }).observe(canvas);
+        new global.ResizeObserver(function () {
+          self.surf.dirty = true;
+          self.invalidate();
+        }).observe(canvas);
       }
       this.invalidate();
     }
@@ -300,8 +386,11 @@
     }
 
     render() {
-      var fit = fitCanvas(this.canvas);
-      var ctx = fit.ctx, w = fit.w, h = fit.h, p = this.palette;
+      if (!this.surf.ensure()) return;
+
+      var ctx = this.surf.ctx;
+      var w = this.surf.w;
+      var h = this.surf.h;
       var cx = w / 2, cy = h / 2;
       var r = Math.min(w, h) / 2 - 3;
       var frac = periodFraction(this.beat);
@@ -317,13 +406,13 @@
       if (frac > 0.001) {
         var start = -Math.PI / 2;
         var end = start + frac * Math.PI * 2;
-        ctx.strokeStyle = hexA(p.beat, 0.7);
+        ctx.strokeStyle = hexA(this.palette.beat, 0.7);
         ctx.lineCap = 'round';
         ctx.beginPath();
         ctx.arc(cx, cy, r, start, end);
         ctx.stroke();
 
-        ctx.fillStyle = p.beat;
+        ctx.fillStyle = this.palette.beat;
         ctx.beginPath();
         ctx.arc(cx + Math.cos(end) * r, cy + Math.sin(end) * r, 2.6, 0, Math.PI * 2);
         ctx.fill();
@@ -341,5 +430,5 @@
   global.BB.PeriodGauge = PeriodGauge;
   global.BB.MOTION_CAP = MOTION_CAP;
   global.BB.periodLabel = periodLabel;
-  global.BB._viz = { hexA: hexA, periodFraction: periodFraction };
+  global.BB._viz = { hexA: hexA, periodFraction: periodFraction, FRAME_MS: FRAME_MS };
 })(window);

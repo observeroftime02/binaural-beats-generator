@@ -136,6 +136,7 @@ body {
     "target target"
     "presets presets"
     "explainer explainer"
+    "diagnostics diagnostics"
     "footer footer";
 }
 
@@ -912,6 +913,34 @@ kbd {
   border-radius: var(--radius-lg);
   background: rgba(255, 255, 255, 0.018);
 }
+
+/* the diagnostics block reuses the explainer styling but has its own grid row */
+.diag-block { grid-area: diagnostics; }
+
+.diag {
+  display: grid;
+  gap: 2px;
+  margin: 4px 0 12px;
+}
+.diag__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 7px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  font-size: 12.5px;
+}
+.diag__row:last-child { border-bottom: 0; }
+.diag__row span,
+.diag__row label { color: var(--text-faint); }
+.diag__row b {
+  font-family: var(--mono);
+  font-weight: 500;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
 .explainer summary {
   display: flex;
   align-items: center;
@@ -995,6 +1024,7 @@ kbd {
       "target"
       "presets"
       "explainer"
+      "diagnostics"
       "footer";
   }
   .target__fields { grid-template-columns: minmax(0, 1fr); gap: 18px; }

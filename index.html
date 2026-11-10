@@ -278,6 +278,40 @@
       </div>
     </details>
 
+    <details class="explainer diag-block" id="diagnostics">
+      <summary>Audio diagnostics</summary>
+      <div class="explainer__body">
+        <p>
+          If you ever hear crackle or scratching, this tells you where it comes
+          from. <strong>Buffer underruns above 0%</strong> mean the browser missed
+          a deadline — usually because the machine is busy, and a bigger buffer
+          fixes it. <strong>Underruns at 0% while you still hear noise</strong>
+          means the page is producing a clean signal and the problem is outside
+          it: the headphones, a Bluetooth link, or another app holding the audio
+          device.
+        </p>
+        <div class="diag" id="diag-list">
+          <div class="diag__row"><span>context state</span><b id="diag-state">—</b></div>
+          <div class="diag__row"><span>sample rate</span><b id="diag-rate">—</b></div>
+          <div class="diag__row"><span>buffer latency</span><b id="diag-latency">—</b></div>
+          <div class="diag__row"><span>audio thread load</span><b id="diag-load">—</b></div>
+          <div class="diag__row"><span>buffer underruns</span><b id="diag-underrun">—</b></div>
+          <div class="diag__row">
+            <label for="latency-mode">buffer mode</label>
+            <select id="latency-mode" class="select"
+                    title="A larger buffer trades latency for stability. Takes effect the next time you press play.">
+              <option value="playback">stable — larger buffer</option>
+              <option value="interactive">low latency — smaller buffer</option>
+            </select>
+          </div>
+        </div>
+        <p class="dim">
+          Changing the buffer mode applies the next time playback starts. Load
+          and underrun figures are only reported by Chromium-based browsers.
+        </p>
+      </div>
+    </details>
+
     <footer class="footer">
       <p>Pure HTML, CSS and JavaScript · Web Audio API · no libraries, no network, no build step.</p>
       <p class="footer__dim">Open <code>index.html</code> straight from disk — everything it needs is in this folder.</p>

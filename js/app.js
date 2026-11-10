@@ -72,8 +72,32 @@
   }
 
   /* ------------------------------------------------------------- instances */
+  var LATENCY_KEY = 'binaural-lab/latency';
+
+  function readLatencyPref() {
+    try {
+      return global.localStorage.getItem(LATENCY_KEY) === 'interactive'
+        ? 'interactive' : 'playback';
+    } catch (e) {
+      return 'playback';
+    }
+  }
+
   var state = new BB.BinauralState(readSaved());
-  var engine = new BB.BinauralEngine();
+  var engine = new BB.BinauralEngine({ latencyHint: readLatencyPref() });
+
+  /* Node lists are cached: render() runs on every slider input event, and
+     querySelectorAll on each one is a surprisingly large amount of work to do
+     while the audio thread needs the main thread to stay responsive. */
+  var uiNodes = { segButtons: [], segments: [], chips: [] };
+
+  function cacheNodes() {
+    uiNodes.segButtons = doc.querySelectorAll('.segmented__btn');
+    uiNodes.segments = doc.querySelectorAll('.bandstrip__seg');
+    uiNodes.chips = doc.querySelectorAll('.chip');
+  }
+
+  var diagHandle = null;
 
   var playBtn = $('play');
   var workspace = doc.querySelector('.workspace');
@@ -216,6 +240,30 @@
       noticeHandle = null;
       el.hidden = true;
     }, ms || 7000);
+  }
+
+  /* ------------------------------------------------------------ diagnostics */
+  function refreshDiagnostics() {
+    var d = engine.diagnostics;
+    var load = d.load || { supported: false };
+
+    setText($('diag-state'), d.state);
+    setText($('diag-rate'), d.sampleRate ? (d.sampleRate / 1000).toFixed(1) + ' kHz' : '—');
+    setText($('diag-latency'), d.baseLatency
+      ? (d.baseLatency * 1000).toFixed(1) + ' ms'
+      : '—');
+
+    if (load.supported) {
+      setText($('diag-load'),
+        Math.round(load.average * 100) + '% avg · ' + Math.round(load.peak * 100) + '% peak');
+      setText($('diag-underrun'), (load.underrun * 100).toFixed(1) + '%');
+    } else {
+      setText($('diag-load'), 'not reported');
+      setText($('diag-underrun'), '—');
+    }
+
+    var sel = $('latency-mode');
+    if (sel && sel.value !== d.latencyHint) sel.value = d.latencyHint;
   }
 
   /* ------------------------------------------------------------- ear check */
@@ -390,7 +438,7 @@
     setText($('mode-hint'), state.mode === 'target'
       ? 'Beat and centre decide; the two ear faders are calculated from them.'
       : 'The two ear faders decide; beat and centre simply follow them.');
-    Array.prototype.forEach.call(doc.querySelectorAll('.segmented__btn'), function (btn) {
+    Array.prototype.forEach.call(uiNodes.segButtons, function (btn) {
       var active = btn.dataset.mode === state.mode;
       btn.classList.toggle('is-active', active);
       btn.setAttribute('aria-checked', active ? 'true' : 'false');
@@ -399,12 +447,12 @@
     /* --- band strip ---------------------------------------------------- */
     var marker = $('band-marker');
     if (marker) marker.style.left = bandOffset(beat).toFixed(2) + '%';
-    Array.prototype.forEach.call(doc.querySelectorAll('.bandstrip__seg'), function (seg) {
+    Array.prototype.forEach.call(uiNodes.segments, function (seg) {
       seg.classList.toggle('is-current', seg.dataset.band === band.key);
     });
 
     /* --- presets -------------------------------------------------------- */
-    Array.prototype.forEach.call(doc.querySelectorAll('.chip'), function (chip) {
+    Array.prototype.forEach.call(uiNodes.chips, function (chip) {
       var p = presetById[chip.dataset.preset];
       var active = p &&
         Math.abs(left - p.left) < 0.005 &&
@@ -542,7 +590,7 @@
     bindRange('volume-range', function (v) { state.setVolume(v / 100); });
 
     /* mode switch */
-    Array.prototype.forEach.call(doc.querySelectorAll('.segmented__btn'), function (btn) {
+    Array.prototype.forEach.call(uiNodes.segButtons, function (btn) {
       btn.addEventListener('click', function () { state.setMode(btn.dataset.mode); });
     });
 
@@ -573,6 +621,33 @@
     /* wav export */
     var exportBtn = $('export-btn');
     if (exportBtn) exportBtn.addEventListener('click', exportWav);
+
+    /* diagnostics: buffer strategy + live audio-thread stats */
+    var latencySelect = $('latency-mode');
+    if (latencySelect) {
+      latencySelect.value = readLatencyPref();
+      latencySelect.addEventListener('change', function () {
+        engine.setLatencyMode(latencySelect.value);
+        try {
+          global.localStorage.setItem(LATENCY_KEY, latencySelect.value);
+        } catch (e) { /* storage unavailable */ }
+        refreshDiagnostics();
+        notice('buffer mode takes effect next time you press play');
+      });
+    }
+
+    var diag = $('diagnostics');
+    if (diag) {
+      diag.addEventListener('toggle', function () {
+        if (diag.open) {
+          refreshDiagnostics();
+          if (!diagHandle) diagHandle = global.setInterval(refreshDiagnostics, 1000);
+        } else if (diagHandle) {
+          global.clearInterval(diagHandle);
+          diagHandle = null;
+        }
+      });
+    }
 
     /* transport */
     if (playBtn) playBtn.addEventListener('click', toggleAudio);
@@ -613,6 +688,7 @@
   function boot() {
     buildBandStrip();
     buildPresets();
+    cacheNodes();
     initBindings();
 
     state.subscribe(function (s, reason) {
@@ -624,6 +700,7 @@
     render();
     updateStatus();
     paintTimer();
+    refreshDiagnostics();
 
     if (!BB.exporter.isSupported()) {
       var exportBtn = $('export-btn');
@@ -643,6 +720,7 @@
   // Expose for debugging / future extensions from the console.
   global.BBApp = {
     state: state, engine: engine, render: render, viz: viz, gauge: gauge,
-    timer: sleepTimer, setSolo: setSolo, exportWav: exportWav, notice: notice
+    timer: sleepTimer, setSolo: setSolo, exportWav: exportWav, notice: notice,
+    diagnostics: refreshDiagnostics
   };
 })(window);

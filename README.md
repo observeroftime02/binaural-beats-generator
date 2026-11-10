@@ -129,7 +129,7 @@ binaural_beats/
 │   └── app.js              DOM binding: input → state → render → audio
 ├── test/
 │   ├── logic.test.js       node test/logic.test.js   (32 assertions)
-│   └── dom.test.js         node test/dom.test.js     (40 assertions)
+│   └── dom.test.js         node test/dom.test.js     (44 assertions)
 └── README.md
 ```
 
@@ -201,6 +201,42 @@ bad idea on a phone — hence the 5-minute cap.
 
 Ear-soloing is deliberately *not* baked into the file: a one-eared binaural beat
 is not a thing.
+
+## Crackle, clicks and dropouts
+
+Pure sines have no business sounding scratchy, so noise here was always a
+defect. There are only a few mechanisms that can produce it:
+
+1. **Buffer underruns.** The audio callback missed its deadline, leaving a hole
+   in the stream. Sounds like crackle, and it correlates with the machine being
+   busy — which is why it showed up while dragging sliders or scrolling.
+2. **Two graphs at once.** Tap play/stop quickly and the old fade-out overlaps
+   the new start: double level (risking clipping) and two nearly identical
+   tones fighting each other.
+3. **Steps in the gain.** Any automation that jumps instead of ramping is a
+   click by definition.
+4. **Something outside the page.** Bluetooth link hiccups, a driver switching
+   sample rates, or another app taking the audio device exclusively.
+
+What the code does about 1-3:
+
+* the drawing loop no longer reads layout (`getBoundingClientRect`) or allocates
+  buffers per frame — both used to run 60 times a second against the main thread
+  the audio thread depends on. It measures only when a `ResizeObserver` fires,
+  reuses one sample buffer, caches the gradient, and paints at 30 fps;
+* the context asks for `latencyHint: 'playback'` (a larger buffer) by default —
+  switchable in **Audio diagnostics** if you would rather trade stability for
+  latency;
+* a restart silences any previous graph before building a new one;
+* `setFrequencies` / `setVolume` ignore unchanged values instead of stacking
+  automation events;
+* the sleep-timer fade glides back to unity instead of stepping there when you
+  re-arm it mid-fade.
+
+For 4, open **Audio diagnostics**. Buffer underruns above 0% mean the browser
+missed a deadline (raise the buffer). Underruns at 0% while you still hear
+noise means the page is producing a clean signal and the problem is downstream —
+headphones, cable, Bluetooth, or another application.
 
 ## Tweaking it
 

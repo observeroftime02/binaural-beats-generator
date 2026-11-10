@@ -143,6 +143,8 @@ class El {
   }
 
   getBoundingClientRect() {
+    // Counted so tests can prove the animation loop never re-reads layout.
+    this.rectReads = (this.rectReads || 0) + 1;
     return { width: 800, height: 190, top: 0, left: 0, right: 800, bottom: 190 };
   }
   getContext() {
@@ -758,6 +760,25 @@ test('ear check: solo is a toggle and reports itself', () => {
   eq(doc.querySelector('.workspace').dataset.solo, 'both');
 });
 
+test('performance: drawing never re-reads layout', () => {
+  const viz = sandbox.BBApp.viz;
+  const canvas = $('beat-canvas');
+
+  viz.setPlaying(true);
+  flushFrames(4);                          // first frame measures once
+  const before = canvas.rectReads || 0;
+
+  flushFrames(40);                         // ~0.6 s of animation
+  eq((canvas.rectReads || 0) - before, 0,
+     'getBoundingClientRect must not be called from the draw loop');
+
+  viz.setPlaying(false);
+});
+
+test('engine: the stable buffer is the default', () => {
+  eq(sandbox.BBApp.engine.diagnostics.latencyHint, 'playback');
+});
+
 test('export: filename carries both carriers, the beat and the length', () => {
   eq(sandbox.BB.exporter.filename({ left: 200, right: 210, seconds: 180 }),
      'binaural-200.00-210.00Hz-beat-10.00Hz-180s.wav');
@@ -939,6 +960,44 @@ async function audioTests() {
     await tick();
     eq(ev.defaultPrevented, false);
     eq($('status').textContent, 'idle');
+  });
+
+  await checkAsync('engine: a redundant retune schedules no automation', async () => {
+    byClass('.chip').find(c => c.dataset.preset === 'alpha').click();   // 210 / 220
+    $('play').click();
+    await tick();
+
+    const osc = sandbox.BBApp.engine._nodes.oscs[0];
+    const before = osc.frequency.calls.length;
+
+    sandbox.BBApp.engine.setFrequencies(210, 220);        // unchanged
+    eq(osc.frequency.calls.length, before, 'nothing scheduled for an unchanged value');
+
+    sandbox.BBApp.engine.setFrequencies(212, 220);        // real change
+    eq(osc.frequency.calls.length > before, true, 'a real change still schedules');
+
+    $('play').click();
+    await tick();
+  });
+
+  // Keep last: swapping the buffer mode closes an idle AudioContext.
+  await checkAsync('diagnostics: the panel reports state and the buffer mode', async () => {
+    sandbox.BBApp.diagnostics();
+    eq(typeof $('diag-state').textContent, 'string');
+    eq($('diag-state').textContent.length > 0, true, 'state is shown');
+    eq($('diag-load').textContent.length > 0, true, 'load row is filled in');
+
+    const sel = $('latency-mode');
+    eq(sel.value, 'playback');
+
+    sel.value = 'interactive';
+    sel.dispatch('change');
+    eq(sandbox.BBApp.engine.diagnostics.latencyHint, 'interactive');
+    eq(storage.get('binaural-lab/latency'), 'interactive', 'choice is remembered');
+
+    sel.value = 'playback';
+    sel.dispatch('change');
+    eq(sandbox.BBApp.engine.diagnostics.latencyHint, 'playback');
   });
 }
 

@@ -43,9 +43,19 @@
    * A tiny wrapper around the Web Audio API that owns exactly two sine tones.
    */
   class BinauralEngine {
-    constructor() {
+    /**
+     * @param {{latencyHint?: 'playback'|'interactive'}} [options]
+     *   'playback' (the default) asks the browser for a larger buffer. This app
+     *   has no interaction-to-sound latency requirement, and a bigger buffer is
+     *   the single most effective defence against the crackle you get when the
+     *   main thread is busy — which is exactly what scrolling or dragging a
+     *   slider does.
+     */
+    constructor(options) {
+      var opts = options || {};
       this.ctx = null;
-      this._nodes = null;      // { oscs:[L,R], gains:[L,R], merger, master }
+      this._nodes = null;      // { oscs:[L,R], gains:[L,R], merger, master, fade }
+      this._lingering = null;  // a previous graph still fading out
       this._playing = false;
       this._volume = 0.45;
       this._left = 200;
@@ -53,6 +63,8 @@
       this._sessionFade = 1;   // sleep-timer fade, 0..1
       this._solo = 'both';     // 'both' | 'left' | 'right'
       this._fadePlan = null;   // scheduled sleep fade, see scheduleSessionFade()
+      this._latencyHint = opts.latencyHint === 'interactive' ? 'interactive' : 'playback';
+      this._load = { supported: false, average: 0, peak: 0, underrun: 0 };
     }
 
     /** Is the Web Audio API available at all? */
@@ -73,6 +85,31 @@
     get frequencies() { return { left: this._left, right: this._right }; }
     get solo() { return this._solo; }
     get hasScheduledFade() { return !!this._fadePlan; }
+
+    /** Everything the diagnostics panel needs to tell a dropout from a defect. */
+    get diagnostics() {
+      var ctx = this.ctx;
+      return {
+        state: ctx ? ctx.state : 'idle',
+        sampleRate: ctx ? ctx.sampleRate : 0,
+        baseLatency: ctx ? (ctx.baseLatency || 0) : 0,
+        outputLatency: ctx ? (ctx.outputLatency || 0) : 0,
+        latencyHint: this._latencyHint,
+        load: this._load
+      };
+    }
+
+    /** Swap buffer strategy. Takes effect the next time playback starts. */
+    setLatencyMode(mode) {
+      var hint = mode === 'interactive' ? 'interactive' : 'playback';
+      if (hint === this._latencyHint) return;
+      this._latencyHint = hint;
+      if (this._playing) return;
+      if (this.ctx && this.ctx.state !== 'closed') {
+        try { this.ctx.close(); } catch (e) { /* ignore */ }
+      }
+      this.ctx = null;
+    }
     get contextState() { return this.ctx ? this.ctx.state : 'closed'; }
 
     _ensureContext() {
@@ -80,11 +117,35 @@
       var Ctor = global.AudioContext || global.webkitAudioContext;
       if (!Ctor) throw new Error('This browser has no Web Audio support.');
       try {
-        this.ctx = new Ctor({ latencyHint: 'interactive' });
+        this.ctx = new Ctor({ latencyHint: this._latencyHint });
       } catch (e) {
         this.ctx = new Ctor(); // older Safari rejects the options object
       }
+      this._watchLoad();
       return this.ctx;
+    }
+
+    /**
+     * Chrome exposes AudioContext.renderCapacity, which reports how hard the
+     * audio thread is working and how often it missed a buffer. That is the
+     * difference between "our buffer is too small / the CPU is starving" and
+     * "the noise comes from the headphones or the driver". Feature-detected,
+     * so it is simply absent elsewhere.
+     */
+    _watchLoad() {
+      var ctx = this.ctx;
+      this._load = { supported: false, average: 0, peak: 0, underrun: 0 };
+      if (!ctx || !ctx.renderCapacity ||
+          typeof ctx.renderCapacity.addEventListener !== 'function') return;
+
+      var self = this;
+      this._load.supported = true;
+      ctx.renderCapacity.addEventListener('update', function (ev) {
+        self._load.average = ev.averageLoad || 0;
+        self._load.peak = ev.peakLoad || 0;
+        self._load.underrun = ev.underrunRatio || 0;
+      });
+      try { ctx.renderCapacity.start({ updateInterval: 1 }); } catch (e) { /* ignore */ }
     }
 
     /**
@@ -116,6 +177,19 @@
       }
 
       var now = ctx.currentTime;
+
+      // If a previous stop is still fading out, silence it instantly. Two
+      // overlapping graphs would double the level (risking clipping) and beat
+      // against themselves — audible as a flutter right after tapping play.
+      if (this._lingering) {
+        try {
+          var oldMaster = this._lingering.master.gain;
+          oldMaster.cancelScheduledValues(now);
+          oldMaster.setValueAtTime(0, now);
+        } catch (e) { /* ignore */ }
+        this._lingering = null;
+      }
+
       var merger = ctx.createChannelMerger(2);
       var master = ctx.createGain();
       var fade = ctx.createGain();      // sleep timer rides on this, not on master
@@ -175,6 +249,7 @@
       this._nodes = null;
       this._playing = false;
       if (!ctx || !nodes) return;
+      this._lingering = nodes;
 
       var now = ctx.currentTime;
       try {
@@ -189,12 +264,14 @@
       });
 
       // Release the nodes once the fade has finished playing out.
+      var self = this;
       global.setTimeout(function () {
         nodes.oscs.forEach(safeDisconnect);
         nodes.gains.forEach(safeDisconnect);
         safeDisconnect(nodes.merger);
         safeDisconnect(nodes.master);
         safeDisconnect(nodes.fade);
+        if (self._lingering === nodes) self._lingering = null;
       }, (FADE_TIME + 0.25) * 1000);
     }
 
@@ -203,9 +280,15 @@
      * so dragging a slider glides instead of zippering.
      */
     setFrequencies(left, right) {
-      this._left = clamp(left, MIN_HZ, MAX_HZ);
-      this._right = clamp(right, MIN_HZ, MAX_HZ);
-      if (!this._nodes || !this.ctx) return;
+      var l = clamp(left, MIN_HZ, MAX_HZ);
+      var r = clamp(right, MIN_HZ, MAX_HZ);
+      // render() calls this on every state change, including ones that have
+      // nothing to do with frequency. Scheduling automation for an unchanged
+      // value just adds work to the audio thread for no audible benefit.
+      var changed = (l !== this._left || r !== this._right);
+      this._left = l;
+      this._right = r;
+      if (!changed || !this._nodes || !this.ctx) return;
       var now = this.ctx.currentTime;
       this._nodes.oscs[0].frequency.setTargetAtTime(this._left, now, RETUNE_TIME);
       this._nodes.oscs[1].frequency.setTargetAtTime(this._right, now, RETUNE_TIME);
@@ -257,9 +340,22 @@
       }
       try {
         g.cancelScheduledValues(now);
-        g.setValueAtTime(1, now);
-        if (plan.startIn > 0) g.setValueAtTime(1, now + plan.startIn);
-        g.setValueCurveAtTime(curve, now + plan.startIn, plan.duration);
+
+        // Never step the gain: glide back to unity from wherever the previous
+        // fade got to. Re-arming the timer mid-fade used to jump 0.5 -> 1.0
+        // here, which is exactly the kind of edge that clicks.
+        g.setValueAtTime(g.value, now);
+        var glide = Math.min(0.1, plan.startIn);
+        var from = g.value;
+        if (glide > 0) {
+          g.linearRampToValueAtTime(1, now + glide);
+          from = 1;
+        } else if (from < 0.999) {
+          // Fade starting immediately: keep the curve continuous with the level
+          // we are actually at.
+          for (var k = 0; k < STEPS; k++) curve[k] *= from;
+        }
+        g.setValueCurveAtTime(curve, now + Math.max(plan.startIn, glide), plan.duration);
       } catch (e) {
         // Very old engines: drop the plan so the caller can fall back to
         // stepping the gain from its interval instead.
@@ -293,8 +389,10 @@
 
     /** 0..1 master volume. */
     setVolume(volume) {
-      this._volume = clamp(volume, 0, 1);
-      if (!this._nodes || !this.ctx) return;
+      var v = clamp(volume, 0, 1);
+      var changed = v !== this._volume;
+      this._volume = v;
+      if (!changed || !this._nodes || !this.ctx) return;
       var now = this.ctx.currentTime;
       this._nodes.master.gain.setTargetAtTime(
         BinauralEngine.gainForVolume(this._volume), now, 0.05
