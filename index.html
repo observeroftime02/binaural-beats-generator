@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="en" data-band="alpha">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#07080b">
+  <meta name="description" content="A pure sine binaural beat generator. Two independent tones, one per ear, built with the Web Audio API. Works offline, no build step.">
+  <title>Binaural Lab — pure sine beat generator</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%230b0d12'/%3E%3Cpath d='M8 32c4-9 8-9 12 0s8 9 12 0 8-9 12 0' fill='none' stroke='%23fbbf24' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<div class="aurora" aria-hidden="true">
+  <span class="aurora__blob aurora__blob--left"></span>
+  <span class="aurora__blob aurora__blob--right"></span>
+</div>
+
+<div class="app">
+
+  <!-- ============================== masthead ============================= -->
+  <header class="masthead">
+    <div class="brand">
+      <svg class="brand__mark" viewBox="0 0 32 32" aria-hidden="true">
+        <circle cx="16" cy="16" r="14.5" fill="none" stroke="currentColor" stroke-width="1" opacity=".3"/>
+        <path d="M3.5 16c3.5-7 6.5-7 10 0s6.5 7 10 0 3.5-7 5 0"
+              fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+      </svg>
+      <div class="brand__text">
+        <h1>Binaural Lab</h1>
+        <p>Two pure sine tones. The beat happens in your head, not in the speakers.</p>
+      </div>
+    </div>
+    <p class="badge">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M4 15v-3a8 8 0 0 1 16 0v3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+        <rect x="2.5" y="14" width="4" height="6" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/>
+        <rect x="17.5" y="14" width="4" height="6" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/>
+      </svg>
+      Headphones on
+    </p>
+  </header>
+
+  <main class="workspace" data-mode="manual">
+
+    <!-- ================================ stage ============================ -->
+    <section class="card stage" aria-labelledby="stage-title">
+      <h2 class="sr-only" id="stage-title">Beat monitor and transport</h2>
+
+      <div class="stage__screen">
+        <canvas id="beat-canvas" role="img"
+                aria-label="Amplitude envelope of the binaural beat, scrolling in real time"></canvas>
+        <span class="stage__tag" id="stage-tag" aria-hidden="true">beat wave · 10 Hz</span>
+      </div>
+
+      <div class="readout">
+        <div class="readout__value">
+          <span class="readout__label">Binaural beat</span>
+          <p class="readout__number">
+            <output id="beat-value" for="left-num right-num beat-num">10.00</output>
+            <span class="readout__unit">Hz</span>
+          </p>
+          <p class="readout__math" id="beat-math">220.00 − 210.00</p>
+        </div>
+
+        <div class="readout__band">
+          <span class="pill" id="band-pill">Alpha</span>
+          <p class="band-note" id="band-note">8–13 Hz · relaxed but awake, eyes closed</p>
+        </div>
+
+        <div class="readout__dial">
+          <canvas id="period-dial" role="img"
+                  aria-label="One beat period, shown as an arc on a logarithmic dial"></canvas>
+          <span class="readout__dialcap" id="period-cap">period · 100 ms</span>
+        </div>
+      </div>
+
+      <div class="bandstrip" id="band-strip" aria-hidden="true"></div>
+
+      <div class="transport">
+        <button id="play" class="play" type="button" aria-pressed="false">
+          <svg class="play__icon play__icon--play" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M9 6.4v11.2l9.4-5.6z" fill="currentColor"/>
+          </svg>
+          <svg class="play__icon play__icon--stop" viewBox="0 0 24 24" aria-hidden="true">
+            <rect x="7" y="7" width="10" height="10" rx="2.5" fill="currentColor"/>
+          </svg>
+          <span class="sr-only" id="play-label">Play tones</span>
+        </button>
+
+        <div class="volume">
+          <div class="volume__top">
+            <label for="volume-range">Volume</label>
+            <output id="volume-out" for="volume-range">45%</output>
+          </div>
+          <input id="volume-range" class="slider slider--volume" type="range"
+                 min="0" max="100" step="1" value="45" aria-label="Master volume">
+        </div>
+
+        <div class="transport__tools">
+          <button id="solo-left" class="btn btn--solo" type="button" aria-pressed="false"
+                  title="Hear the left ear on its own - the quickest way to check your headphones">L only</button>
+          <button id="solo-right" class="btn btn--solo" type="button" aria-pressed="false"
+                  title="Hear the right ear on its own">R only</button>
+          <button id="swap" class="btn" type="button" title="Swap left and right tones">Swap</button>
+          <button id="reset" class="btn" type="button" title="Back to 200 / 210 Hz">Reset</button>
+        </div>
+      </div>
+
+      <div class="session">
+        <div class="session__group">
+          <label for="timer-select">Session</label>
+          <select id="timer-select" class="select"
+                  title="Runs for the chosen time, fades out over the final minute, then stops">
+            <option value="0">no timer</option>
+            <option value="5">5 min</option>
+            <option value="10">10 min</option>
+            <option value="20">20 min</option>
+            <option value="30">30 min</option>
+            <option value="45">45 min</option>
+            <option value="60">60 min</option>
+          </select>
+          <span class="session__count" id="timer-count" hidden></span>
+        </div>
+
+        <div class="session__group">
+          <label for="export-length">Save audio</label>
+          <select id="export-length" class="select"
+                  title="Renders exactly what you hear to a WAV file, faster than real time">
+            <option value="60">1 min</option>
+            <option value="180" selected>3 min</option>
+            <option value="300">5 min</option>
+          </select>
+          <button id="export-btn" class="btn" type="button"
+                  title="Render this tone pair to a .wav download">WAV</button>
+        </div>
+      </div>
+
+      <p class="stage__hint">
+        <kbd>Space</kbd> play / stop &nbsp;·&nbsp; <kbd>Esc</kbd> stop &nbsp;·&nbsp;
+        <span id="status">idle</span>
+        <span class="notice" id="notice" hidden></span>
+      </p>
+    </section>
+
+    <!-- ============================== channels =========================== -->
+    <section class="card chan chan--left" aria-labelledby="left-title">
+      <div class="chan__head">
+        <span class="chan__ear" aria-hidden="true">L</span>
+        <h2 id="left-title">Left ear</h2>
+        <span class="chan__auto" title="This value is calculated from the beat target">derived</span>
+      </div>
+      <div class="chan__freq">
+        <input id="left-num" class="num" type="number" min="20" max="1000" step="0.01"
+               value="200" inputmode="decimal" aria-label="Left ear frequency in hertz">
+        <span class="chan__unit">Hz</span>
+      </div>
+      <input id="left-range" class="slider" type="range"
+             min="20" max="1000" step="0.01" value="200" aria-label="Left ear frequency slider">
+      <div class="chan__scale"><span>20 Hz</span><span>1 kHz</span></div>
+    </section>
+
+    <section class="card chan chan--right" aria-labelledby="right-title">
+      <div class="chan__head">
+        <span class="chan__ear" aria-hidden="true">R</span>
+        <h2 id="right-title">Right ear</h2>
+        <span class="chan__auto" title="This value is calculated from the beat target">derived</span>
+      </div>
+      <div class="chan__freq">
+        <input id="right-num" class="num" type="number" min="20" max="1000" step="0.01"
+               value="210" inputmode="decimal" aria-label="Right ear frequency in hertz">
+        <span class="chan__unit">Hz</span>
+      </div>
+      <input id="right-range" class="slider" type="range"
+             min="20" max="1000" step="0.01" value="210" aria-label="Right ear frequency slider">
+      <div class="chan__scale"><span>20 Hz</span><span>1 kHz</span></div>
+    </section>
+
+    <!-- ============================= beat target ========================== -->
+    <section class="card target" aria-labelledby="target-title">
+      <div class="card__head">
+        <div>
+          <h2 id="target-title">Dial in the beat</h2>
+          <p class="card__sub" id="mode-hint">The two ear faders decide; beat and centre simply follow them.</p>
+        </div>
+        <div class="segmented" role="radiogroup" aria-label="Which values drive the tones">
+          <button class="segmented__btn is-active" type="button" role="radio"
+                  aria-checked="true" data-mode="manual">Two tones</button>
+          <button class="segmented__btn" type="button" role="radio"
+                  aria-checked="false" data-mode="target">Beat target</button>
+        </div>
+      </div>
+
+      <div class="target__fields">
+        <div class="field field--beat">
+          <div class="field__top">
+            <label for="beat-num">Beat frequency</label>
+            <div class="field__input">
+              <input id="beat-num" class="num num--sm" type="number" min="0" max="40" step="0.01"
+                     value="10" inputmode="decimal" aria-label="Target beat frequency in hertz">
+              <span>Hz</span>
+            </div>
+          </div>
+          <input id="beat-range" class="slider slider--beat" type="range"
+                 min="0" max="40" step="0.01" value="10" aria-label="Target beat frequency slider">
+          <div class="chan__scale"><span>0 Hz</span><span>40 Hz</span></div>
+        </div>
+
+        <div class="field field--centre">
+          <div class="field__top">
+            <label for="centre-num">Centre pitch</label>
+            <div class="field__input">
+              <input id="centre-num" class="num num--sm" type="number" min="30" max="800" step="0.01"
+                     value="205" inputmode="decimal" aria-label="Centre pitch in hertz">
+              <span>Hz</span>
+            </div>
+          </div>
+          <input id="centre-range" class="slider slider--centre" type="range"
+                 min="30" max="800" step="0.01" value="205" aria-label="Centre pitch slider">
+          <div class="chan__scale"><span>30 Hz</span><span>800 Hz</span></div>
+        </div>
+      </div>
+
+      <p class="target__result">
+        <span class="target__arrow" aria-hidden="true">→</span>
+        <span><b id="target-left">200.00</b> Hz <span class="dim">left</span></span>
+        <span class="target__sep" aria-hidden="true">·</span>
+        <span><b id="target-right">210.00</b> Hz <span class="dim">right</span></span>
+      </p>
+    </section>
+
+    <!-- =============================== presets =========================== -->
+    <section class="card presets" aria-labelledby="presets-title">
+      <div class="card__head">
+        <div>
+          <h2 id="presets-title">Presets</h2>
+          <p class="card__sub">One for every band — play them back to back to hear the difference.</p>
+        </div>
+      </div>
+      <div class="presets__grid" id="preset-grid"></div>
+    </section>
+
+    <!-- ============================== explainer ========================== -->
+    <details class="explainer">
+      <summary>How binaural beats actually work</summary>
+      <div class="explainer__body">
+        <p>
+          Your left ear gets <strong>one</strong> pure sine tone and your right ear gets
+          <strong>another</strong>. They are never mixed in software or in the air — with
+          headphones on, each tone reaches exactly one eardrum. What you "hear" as a pulsing
+          beat is created further upstream: the superior olivary complex in your brainstem
+          compares the timing of the two signals and registers the mismatch. The rate it
+          reports back is simply
+          <code>|f<sub>left</sub> − f<sub>right</sub>|</code>.
+        </p>
+        <p>
+          Two sines summed arithmetically give
+          <code>2·cos(π·Δf·t) · sin(2π·f<sub>avg</sub>·t)</code>: a fast tone at the average
+          pitch, wrapped in a slow loudness envelope at the difference. The wave on the
+          canvas above is that slow term — one crest per beat, one second of time across the
+          width, so counting crests gives you the frequency. It is also exactly what you
+          hear if you put both tones in the <em>same</em> ear, which is an ordinary
+          <em>amplitude</em> beat, not a binaural one.
+        </p>
+        <p>
+          A word of honesty: binaural beats are a real, well-documented auditory phenomenon,
+          but claims that they reliably "entrain" your brainwaves into a chosen band are
+          supported mostly by small studies with mixed results. The relaxation people report
+          may come as much from sitting still with headphones on for twenty minutes as from
+          the beat rate. Treat the frequencies as a mood-setting dial, not a medical one.
+        </p>
+        <p>
+          Keep the volume moderate, don't fall asleep with headphones at high level, and skip
+          this if you have a history of seizures or tinnitus — as with any audio, you are the
+          best judge of what your ears can take.
+        </p>
+      </div>
+    </details>
+
+    <footer class="footer">
+      <p>Pure HTML, CSS and JavaScript · Web Audio API · no libraries, no network, no build step.</p>
+      <p class="footer__dim">Open <code>index.html</code> straight from disk — everything it needs is in this folder.</p>
+    </footer>
+
+  </main>
+</div>
+
+<noscript>
+  <p class="noscript">This generator needs JavaScript — the tones are synthesised live with the Web Audio API.</p>
+</noscript>
+
+<!-- Classic scripts (not ES modules) so the page works from file:// with no server. -->
+<script src="js/presets.js"></script>
+<script src="js/state.js"></script>
+<script src="js/audio-engine.js"></script>
+<script src="js/visualizer.js"></script>
+<script src="js/timer.js"></script>
+<script src="js/wav.js"></script>
+<script src="js/export.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
