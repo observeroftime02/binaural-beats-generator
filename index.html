@@ -131,9 +131,21 @@
             <option value="60">1 min</option>
             <option value="180" selected>3 min</option>
             <option value="300">5 min</option>
+            <option value="600">10 min</option>
+            <option value="1800">30 min</option>
+            <option value="3600">60 min</option>
+            <option value="custom">custom…</option>
           </select>
+          <span class="session__custom" id="export-custom-wrap" hidden>
+            <input id="export-custom" class="num num--sm" type="number"
+                   min="1" max="120" step="1" value="60" inputmode="numeric"
+                   aria-label="Custom WAV duration in minutes">
+            <span class="session__unit">min</span>
+          </span>
           <button id="export-btn" class="btn" type="button"
                   title="Render this tone pair to a .wav download">WAV</button>
+          <span class="session__estimate" id="export-estimate"
+                title="Approximate size of the downloaded WAV">≈ 33 MB</span>
         </div>
       </div>
 

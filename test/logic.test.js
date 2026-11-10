@@ -363,6 +363,24 @@ test('wav: header describes the stream correctly', () => {
   eq(bytes.byteLength, 44 + 16);
 });
 
+test('wav: header and PCM pieces compose into the same file', () => {
+  const buffer = fakeBuffer(2, 44100, [
+    new Float32Array([0, 0.5, -0.5, 1]),
+    new Float32Array([-1, 0.25, 0, -0.25])
+  ]);
+  const whole = new Uint8Array(BB.encodeWav(buffer));
+  const header = new Uint8Array(BB.wavHeader(16, 44100, 2));
+  const pcm = new Uint8Array(BB.encodePcm(buffer));
+
+  eq(header.byteLength, BB.WAV_HEADER_BYTES, 'header length');
+  eq(pcm.byteLength, 16, 'PCM length');
+  eq(whole.byteLength, header.byteLength + pcm.byteLength, 'composed length');
+  eq(Array.from(whole.slice(0, header.byteLength)).join(','),
+     Array.from(header).join(','), 'header bytes match');
+  eq(Array.from(whole.slice(header.byteLength)).join(','),
+     Array.from(pcm).join(','), 'sample bytes match');
+});
+
 test('wav: samples are interleaved and scaled to 16-bit', () => {
   const buffer = fakeBuffer(2, 44100, [
     new Float32Array([0, 0.5, -0.5, 1]),

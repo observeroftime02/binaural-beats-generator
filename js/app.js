@@ -355,10 +355,61 @@
   }
 
   /* ---------------------------------------------------------------- export */
+  var EXPORT_MIN_MINUTES = 1;
+  var EXPORT_MAX_MINUTES = 120;   // 2 h is already ~1.4 GB of 16-bit stereo
+
+  function readCustomMinutes() {
+    var input = $('export-custom');
+    var mins = parseFloat(input && input.value);
+    if (!isFinite(mins)) mins = 60;
+    return clamp(Math.round(mins), EXPORT_MIN_MINUTES, EXPORT_MAX_MINUTES);
+  }
+
+  function exportSeconds() {
+    var sel = $('export-length');
+    if (sel && sel.value === 'custom') return readCustomMinutes() * 60;
+    var seconds = parseFloat(sel && sel.value);
+    return isFinite(seconds) && seconds > 0 ? seconds : 180;
+  }
+
+  function exportLengthLabel(seconds) {
+    if (seconds < 60) return Math.round(seconds) + ' s';
+    var mins = seconds / 60;
+    return (mins % 1 === 0 ? mins : mins.toFixed(1)) + ' min';
+  }
+
+  function updateExportEstimate() {
+    var out = $('export-estimate');
+    if (!out) return;
+    var seconds = exportSeconds();
+    var bytes = BB.exporter.estimatedBytes(seconds);
+    var heavy = bytes > 250 * 1024 * 1024;
+
+    setText(out, '≈ ' + BB.formatBytes(bytes));
+    out.classList.toggle('is-heavy', heavy);
+    out.title = exportLengthLabel(seconds) + ' WAV · ' + BB.formatBytes(bytes) +
+      (heavy ? ' — large download; very long files can exceed browser memory.' : '');
+  }
+
+  /** Show the custom-minutes field only when the select asks for it. */
+  function syncExportControls(focus) {
+    var sel = $('export-length');
+    var wrap = $('export-custom-wrap');
+    var custom = $('export-custom');
+    var isCustom = !!sel && sel.value === 'custom';
+
+    if (wrap) wrap.hidden = !isCustom;
+    if (custom) custom.disabled = !isCustom;
+    if (isCustom && focus && custom && typeof custom.focus === 'function') {
+      custom.focus();
+      if (typeof custom.select === 'function') custom.select();
+    }
+    updateExportEstimate();
+  }
+
   async function exportWav() {
     var btn = $('export-btn');
-    var lengthSelect = $('export-length');
-    var seconds = (lengthSelect && parseFloat(lengthSelect.value)) || 180;
+    var seconds = exportSeconds();
 
     if (!BB.exporter.isSupported()) {
       notice('this browser cannot render audio offline');
@@ -367,19 +418,26 @@
 
     var original = btn ? btn.textContent : 'WAV';
     if (btn) { btn.disabled = true; btn.textContent = 'rendering…'; }
-    notice('rendering ' + BB.formatBytes(BB.exporter.estimatedBytes(seconds)) + '…', 60000);
+    notice('rendering ' + exportLengthLabel(seconds) + ' · ' +
+      BB.formatBytes(BB.exporter.estimatedBytes(seconds)) + '…', 60000);
 
     try {
-      var buffer = await BB.exporter.renderSession({
+      var result = await BB.exporter.renderWav({
         left: state.left,
         right: state.right,
         volume: state.volume,
         seconds: seconds
+      }, function (progress) {
+        var pct = Math.round((progress.rendered / progress.total) * 100);
+        if (btn) btn.textContent = pct + '%';
+        notice('rendering ' + exportLengthLabel(seconds) + ' · ' + pct + '% · ' +
+          BB.formatBytes(progress.bytes) + '…', 60000);
       });
+
       var name = BB.exporter.filename({
         left: state.left, right: state.right, seconds: seconds
       });
-      var bytes = BB.exporter.save(buffer, name);
+      var bytes = BB.exporter.save(result.parts, name);
       notice('saved ' + name + ' · ' + BB.formatBytes(bytes));
     } catch (err) {
       notice('export failed: ' + (err && err.message ? err.message : err));
@@ -622,6 +680,20 @@
     var exportBtn = $('export-btn');
     if (exportBtn) exportBtn.addEventListener('click', exportWav);
 
+    var exportLength = $('export-length');
+    if (exportLength) {
+      exportLength.addEventListener('change', function () { syncExportControls(true); });
+    }
+
+    var exportCustom = $('export-custom');
+    if (exportCustom) {
+      exportCustom.addEventListener('input', updateExportEstimate);
+      exportCustom.addEventListener('change', function () {
+        exportCustom.value = String(readCustomMinutes());
+        updateExportEstimate();
+      });
+    }
+
     /* diagnostics: buffer strategy + live audio-thread stats */
     var latencySelect = $('latency-mode');
     if (latencySelect) {
@@ -700,6 +772,7 @@
     render();
     updateStatus();
     paintTimer();
+    syncExportControls(false);
     refreshDiagnostics();
 
     if (!BB.exporter.isSupported()) {
@@ -721,6 +794,6 @@
   global.BBApp = {
     state: state, engine: engine, render: render, viz: viz, gauge: gauge,
     timer: sleepTimer, setSolo: setSolo, exportWav: exportWav, notice: notice,
-    diagnostics: refreshDiagnostics
+    exportSeconds: exportSeconds, diagnostics: refreshDiagnostics
   };
 })(window);

@@ -47,7 +47,8 @@ to connect. Standard library only — nothing to install.
   headphones are on the right way round, and that nothing (Bluetooth mono, an
   OS accessibility setting) is collapsing the stereo image.
 * **WAV export** — render the current pair offline and download it, faster than
-  real time, with no server and no MediaRecorder.
+  real time, with no server and no MediaRecorder. Pick 1, 3, 5, 10, 30 or 60
+  minutes, or type any custom length from 1 minute up to 2 hours.
 * **A live beat wave** — one second of the *beat itself* across the canvas, so
   the number of crests on screen is the frequency in hertz. The crests always
   show the true rate; the drift is speed-limited so it never turns into a
@@ -128,8 +129,8 @@ binaural_beats/
 │   ├── export.js           offline render + download
 │   └── app.js              DOM binding: input → state → render → audio
 ├── test/
-│   ├── logic.test.js       node test/logic.test.js   (32 assertions)
-│   └── dom.test.js         node test/dom.test.js     (44 assertions)
+│   ├── logic.test.js       node test/logic.test.js   (33 assertions)
+│   └── dom.test.js         node test/dom.test.js     (47 assertions)
 └── README.md
 ```
 
@@ -195,9 +196,17 @@ same graph as the live engine (two sines, one hard-wired per channel), plus
 half-second fades at each edge so the file can be looped without a click. It
 renders faster than real time: a three-minute file takes a second or two.
 
-Sizes, at 48 kHz / 16-bit stereo: **1 min ≈ 11 MB, 3 min ≈ 33 MB, 5 min ≈ 58 MB**.
-The render holds the whole buffer in memory first, so very long exports are a
-bad idea on a phone — hence the 5-minute cap.
+Choose a preset length or **custom…** to type any duration in minutes (1–120).
+The size estimate next to the button updates as you change it. Long files are
+rendered in 100-second chunks and encoded to 16-bit PCM as they go, so the app
+never has to hold a one-hour float buffer in memory. Chunk boundaries are
+seamless: at the app's 0.01 Hz resolution, 100 seconds is always a whole number
+of cycles for both tones.
+
+Sizes, at 48 kHz / 16-bit stereo: **1 min ≈ 11 MB, 3 min ≈ 33 MB, 5 min ≈ 58 MB,
+60 min ≈ 659 MB**. The finished download is still held in browser memory as a
+Blob, so the practical limit depends on the device — the custom field stops at
+two hours, and the estimate turns amber above 250 MB.
 
 Ear-soloing is deliberately *not* baked into the file: a one-eared binaural beat
 is not a thing.

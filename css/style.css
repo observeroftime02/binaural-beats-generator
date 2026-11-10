@@ -755,6 +755,33 @@ kbd {
 }
 .session__count[hidden] { display: none; }
 
+/* custom export duration + the size it will produce */
+.session__custom {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.session__custom[hidden] { display: none; }
+.session__custom .num {
+  width: 5.5em;
+  padding: 6px 8px;
+  border-radius: 9px;
+  font-size: 13px;
+  text-align: center;
+}
+.session__unit {
+  font-size: 11px;
+  color: var(--text-faint);
+}
+.session__estimate {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.session__estimate.is-heavy { color: var(--beat); }
+
 .select {
   padding: 7px 8px;
   border: 1px solid var(--line);

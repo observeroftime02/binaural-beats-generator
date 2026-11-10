@@ -786,6 +786,33 @@ test('export: filename carries both carriers, the beat and the length', () => {
      'binaural-400.00-440.00Hz-beat-40.00Hz-60s.wav');
 });
 
+test('export: custom minutes are clamped and update the size estimate', () => {
+  const sel = $('export-length');
+  sel.value = 'custom';
+  sel.dispatch('change');
+
+  eq($('export-custom-wrap').hidden, false, 'custom field is revealed');
+  eq($('export-custom').disabled, false, 'custom field is usable');
+  eq(sandbox.BBApp.exportSeconds(), 3600, 'default custom duration is one hour');
+  eq($('export-estimate').textContent, '≈ 659 MB');
+
+  setInput($('export-custom'), '10');
+  eq(sandbox.BBApp.exportSeconds(), 600, 'ten minutes');
+  eq($('export-estimate').textContent, '≈ 110 MB');
+  eq($('export-estimate').classList.contains('is-heavy'), false, '10 min is not flagged');
+
+  $('export-custom').value = '9999';
+  $('export-custom').dispatch('change');
+  eq($('export-custom').value, '120', 'the input is capped at two hours');
+  eq(sandbox.BBApp.exportSeconds(), 7200, 'and the export follows the cap');
+  eq($('export-estimate').classList.contains('is-heavy'), true, 'huge files are flagged');
+
+  sel.value = '180';
+  sel.dispatch('change');
+  eq($('export-custom-wrap').hidden, true, 'custom field is hidden again');
+  eq($('export-estimate').textContent, '≈ 33 MB');
+});
+
 /* ========================================================================== *
  *  Audio graph
  * ========================================================================== */
@@ -944,6 +971,40 @@ async function audioTests() {
       'notice says: ' + $('notice').textContent);
     eq($('export-btn').disabled, false, 'the button comes back');
     eq($('export-btn').textContent.trim(), 'WAV');
+  });
+
+  await checkAsync('export: a custom duration reaches the filename', async () => {
+    byClass('.chip').find(c => c.dataset.preset === 'alpha').click();   // 210 / 220
+    const sel = $('export-length');
+    sel.value = 'custom';
+    sel.dispatch('change');
+    setInput($('export-custom'), '6');
+    $('export-btn').click();
+
+    await tick(); await tick(); await tick();
+
+    eq($('notice').textContent.indexOf(
+      'saved binaural-210.00-220.00Hz-beat-10.00Hz-360s.wav'), 0,
+      'notice says: ' + $('notice').textContent);
+    eq($('export-btn').textContent.trim(), 'WAV');
+
+    sel.value = '180';
+    sel.dispatch('change');
+  });
+
+  await checkAsync('export: long files are rendered in 100-second chunks', async () => {
+    const progress = [];
+    const result = await sandbox.BB.exporter.renderWav({
+      left: 210, right: 220, volume: 0.45, seconds: 360
+    }, (p) => progress.push(p));
+
+    eq(progress.length, 4, 'six minutes means four chunks');
+    eq(result.parts.length, 5, 'one header plus four PCM parts');
+    eq(result.bytes, 44 + 4 * 64, 'bytes add up across the parts');
+    near(result.seconds, 360, 1e-9, 'total duration');
+
+    const view = new DataView(result.parts[0]);
+    eq(view.getUint32(40, true), 4 * 64, 'header advertises all PCM bytes');
   });
 
   await checkAsync('keyboard: space toggles playback when nothing else has focus', async () => {

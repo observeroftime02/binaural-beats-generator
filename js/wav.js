@@ -37,14 +37,22 @@
     return s < 0 ? Math.round(s * 0x8000) : Math.round(s * 0x7fff);
   }
 
-  /** @returns {ArrayBuffer} a complete .wav file */
-  function encodeWav(buffer) {
-    var channels = Math.max(1, buffer.numberOfChannels | 0);
-    var frames = buffer.length | 0;
-    var sampleRate = Math.round(buffer.sampleRate);
-    var blockAlign = channels * BYTES_PER_SAMPLE;
-    var dataBytes = frames * blockAlign;
-    var out = new ArrayBuffer(HEADER_BYTES + dataBytes);
+  /** Bytes in the interleaved sample area, excluding the header. */
+  function pcmBytes(frames, channels) {
+    return frames * Math.max(1, channels | 0) * BYTES_PER_SAMPLE;
+  }
+
+  /**
+   * A 44-byte WAV header describing a PCM stream of `dataBytes`.
+   * Kept separate from the samples so long exports can be encoded chunk by
+   * chunk without ever needing the whole file in one ArrayBuffer.
+   * @returns {ArrayBuffer}
+   */
+  function wavHeader(dataBytes, sampleRate, channels) {
+    var ch = Math.max(1, channels | 0);
+    var rate = Math.round(sampleRate);
+    var blockAlign = ch * BYTES_PER_SAMPLE;
+    var out = new ArrayBuffer(HEADER_BYTES);
     var view = new DataView(out);
 
     writeString(view, 0, 'RIFF');
@@ -54,19 +62,31 @@
     writeString(view, 12, 'fmt ');
     view.setUint32(16, 16, true);          // subchunk size for PCM
     view.setUint16(20, 1, true);           // 1 = uncompressed PCM
-    view.setUint16(22, channels, true);
-    view.setUint32(24, sampleRate, true);
-    view.setUint32(28, sampleRate * blockAlign, true);
+    view.setUint16(22, ch, true);
+    view.setUint32(24, rate, true);
+    view.setUint32(28, rate * blockAlign, true);
     view.setUint16(32, blockAlign, true);
     view.setUint16(34, 16, true);          // bits per sample
 
     writeString(view, 36, 'data');
     view.setUint32(40, dataBytes, true);
+    return out;
+  }
+
+  /**
+   * Interleaved 16-bit samples only — everything after the 44-byte header.
+   * @returns {ArrayBuffer}
+   */
+  function encodePcm(buffer) {
+    var channels = Math.max(1, buffer.numberOfChannels | 0);
+    var frames = buffer.length | 0;
+    var out = new ArrayBuffer(pcmBytes(frames, channels));
+    var view = new DataView(out);
 
     var data = [];
     for (var c = 0; c < channels; c++) data.push(buffer.getChannelData(c));
 
-    var offset = HEADER_BYTES;
+    var offset = 0;
     for (var i = 0; i < frames; i++) {
       for (var ch = 0; ch < channels; ch++) {
         view.setInt16(offset, toInt16(data[ch][i]), true);
@@ -76,9 +96,20 @@
     return out;
   }
 
+  /** @returns {ArrayBuffer} a complete .wav file */
+  function encodeWav(buffer) {
+    var channels = Math.max(1, buffer.numberOfChannels | 0);
+    var pcm = encodePcm(buffer);
+    var header = wavHeader(pcm.byteLength, buffer.sampleRate, channels);
+    var out = new Uint8Array(HEADER_BYTES + pcm.byteLength);
+    out.set(new Uint8Array(header), 0);
+    out.set(new Uint8Array(pcm), HEADER_BYTES);
+    return out.buffer;
+  }
+
   /** Rough file size, for showing the user what they are about to allocate. */
   function estimateBytes(seconds, sampleRate, channels) {
-    return HEADER_BYTES + Math.ceil(seconds * sampleRate) * channels * BYTES_PER_SAMPLE;
+    return HEADER_BYTES + pcmBytes(Math.ceil(seconds * sampleRate), channels);
   }
 
   function formatBytes(bytes) {
@@ -89,6 +120,8 @@
 
   global.BB = global.BB || {};
   global.BB.encodeWav = encodeWav;
+  global.BB.encodePcm = encodePcm;
+  global.BB.wavHeader = wavHeader;
   global.BB.estimateBytes = estimateBytes;
   global.BB.formatBytes = formatBytes;
   global.BB.WAV_HEADER_BYTES = HEADER_BYTES;
